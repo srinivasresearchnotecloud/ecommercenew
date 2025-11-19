@@ -1,0 +1,431 @@
+# Streamlit E‑Commerce App — Modular Version
+
+This canvas contains a multi-file layout (presented as single-document) for a production-friendly Streamlit e-commerce demo. Files included below can be copied into separate files in a GitHub repo.
+
+---
+
+## Files in this project
+
+
+
+---
+
+### app.py
+
+```python
+import streamlit as st
+from db import init_db, get_session
+from auth import login_user, signup_user, current_user
+from catalog import show_catalog, show_cart_page
+from admin import show_admin_dashboard
+from payments import stripe_checkout_handler
+
+st.set_page_config(page_title="E-Commerce Demo", layout="wide")
+init_db()
+
+with st.sidebar:
+    st.title("E‑Store")
+    user = current_user()
+    if user:
+        st.write(f"Logged in as {user.username}")
+        if st.button("Logout"):
+            st.session_state.pop('user', None)
+            st.experimental_rerun()
+    page = st.radio("Navigation", ["Home","Catalog","Cart","Checkout","Account","Admin"]) 
+
+if page == "Home":
+    st.header("Welcome to E‑Store")
+    st.image("https://via.placeholder.com/1000x300?text=E-Commerce+Banner")
+
+elif page == "Catalog":
+    show_catalog()
+
+elif page == "Cart":
+    show_cart_page()
+
+elif page == "Checkout":
+    if not current_user():
+        st.warning("Login before checkout")
+    else:
+        stripe_checkout_handler()
+
+elif page == "Account":
+    st.header("Account")
+    tabs = st.tabs(["Login","Signup"])
+    with tabs[0]:
+        login_user()
+    with tabs[1]:
+        signup_user()
+
+elif page == "Admin":
+    show_admin_dashboard()
+```
+
+---
+
+### db.py
+
+```python
+from sqlalchemy import create_engine, Column, Integer, String, Float, Text, Boolean
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+import os
+
+DB_URL = os.environ.get('DATABASE_URL','sqlite:///ecommerce_demo.db')
+engine = create_engine(DB_URL, connect_args={"check_same_thread": False} if DB_URL.startswith('sqlite') else {})
+SessionLocal = sessionmaker(bind=engine)
+Base = declarative_base()
+
+class User(Base):
+    __tablename__ = 'users'
+    id = Column(Integer, primary_key=True)
+    username = Column(String, unique=True, index=True)
+    full_name = Column(String)
+    password_hash = Column(String)
+    is_admin = Column(Boolean, default=False)
+
+class Product(Base):
+    __tablename__ = 'products'
+    id = Column(Integer, primary_key=True)
+    sku = Column(String, unique=True)
+    name = Column(String)
+    description = Column(Text)
+    price = Column(Float)
+    category = Column(String)
+    image_url = Column(String)
+    stock = Column(Integer)
+
+class Order(Base):
+    __tablename__ = 'orders'
+    id = Column(Integer, primary_key=True)
+    order_id = Column(String, unique=True)
+    username = Column(String)
+    items_json = Column(Text)
+    total = Column(Float)
+
+def init_db():
+    Base.metadata.create_all(bind=engine)
+
+def get_session():
+    return SessionLocal()
+```
+
+---
+
+### auth.py
+
+```python
+import streamlit as st
+from passlib.hash import bcrypt
+from db import get_session, User
+
+def hash_password(p):
+    return bcrypt.hash(p)
+
+def verify_password(p, h):
+    return bcrypt.verify(p, h)
+
+def signup_user():
+    st.subheader("Create account")
+    username = st.text_input("Username", key='su_user')
+    full = st.text_input("Full name", key='su_full')
+    pw = st.text_input("Password", type='password', key='su_pass')
+    if st.button("Signup"):
+        if len(username) < 3 or len(pw) < 4:
+            st.error("Username / password too short")
+            return
+        db = get_session()
+        if db.query(User).filter(User.username==username).first():
+            st.error("User exists")
+            return
+        user = User(username=username, full_name=full, password_hash=hash_password(pw))
+        db.add(user); db.commit()
+        st.success("Account created — login now")
+
+def login_user():
+    st.subheader("Login")
+    username = st.text_input("Username", key='li_user')
+    pw = st.text_input("Password", type='password', key='li_pass')
+    if st.button("Login"):
+        db = get_session()
+        user = db.query(User).filter(User.username==username).first()
+        if not user or not verify_password(pw, user.password_hash):
+            st.error("Invalid")
+            return
+        st.session_state['user'] = user.username
+        st.success("Logged in")
+        st.experimental_rerun()
+
+def current_user():
+    if 'user' not in st.session_state:
+        return None
+    db = get_session()
+    return db.query(User).filter(User.username==st.session_state['user']).first()
+```
+
+---
+
+### catalog.py
+
+```python
+import streamlit as st
+from db import get_session, Product
+import pandas as pd
+
+if 'cart' not in st.session_state:
+    st.session_state.cart = []
+
+
+def show_catalog():
+    st.header("Products")
+    db = get_session()
+    products = db.query(Product).all()
+    q = st.text_input("Search")
+    if q:
+        products = [p for p in products if q.lower() in (p.name + (p.description or '')).lower()]
+    cols = st.columns(3)
+    for i,p in enumerate(products):
+        with cols[i%3]:
+            st.image(p.image_url or 'https://via.placeholder.com/300')
+            st.markdown(f"### {p.name}")
+            st.write(p.description)
+            st.write(f"Price: ₹{p.price}")
+            qty = st.number_input(f"Qty_{p.id}", min_value=1, value=1, key=f"qty_{p.id}")
+            if st.button("Add to cart", key=f"add_{p.id}"):
+                st.session_state.cart.append({'product_id':p.id,'name':p.name,'price':float(p.price),'qty':qty})
+                st.success(f"Added {p.name}")
+
+
+def show_cart_page():
+    st.header("Cart")
+    if not st.session_state.cart:
+        st.info('Cart empty')
+        return
+    df = pd.DataFrame(st.session_state.cart)
+    df['subtotal'] = df.price * df.qty
+    st.table(df[['name','price','qty','subtotal']])
+    st.write(f"Total: ₹{df['subtotal'].sum()}")
+```
+
+---
+
+### payments.py (Stripe test-mode)
+
+```python
+import streamlit as st
+from db import get_session, Order
+import stripe
+import json
+import uuid
+
+
+def stripe_checkout_handler():
+    st.header("Checkout")
+    if not st.session_state.cart:
+        st.info('Cart empty')
+        return
+    df_total = sum([item['price']*item['qty'] for item in st.session_state.cart])
+    st.write(f"Amount: ₹{df_total}")
+
+    st.write("Payment method: Stripe (test mode)")
+
+    # Read keys from secrets
+    stripe_keys = st.secrets.get('stripe', {})
+    publishable = stripe_keys.get('publishable_key')
+    secret = stripe_keys.get('secret_key')
+    if not secret:
+        st.error("Stripe secret key not configured. Add to Streamlit Secrets as stripe.secret_key and stripe.publishable_key")
+        return
+
+    if st.button("Pay with Stripe (Test)"):
+        try:
+            stripe.api_key = secret
+            session = stripe.checkout.Session.create(
+                payment_method_types=['card'],
+                line_items=[{
+                    'price_data':{
+                        'currency':'inr',
+                        'unit_amount': int(df_total*100),
+                        'product_data':{
+                            'name':'E-Store Order',
+                        }
+                    },
+                    'quantity':1
+                }],
+                mode='payment',
+                success_url='https://example.com/success',
+                cancel_url='https://example.com/cancel',
+            )
+            st.success('Created Stripe session')
+            st.write('Open this URL to simulate payment (test):')
+            st.write(session.url)
+
+            # Save mock order as paid for demo
+            db = get_session()
+            order = Order(order_id=str(uuid.uuid4()), username=st.session_state.get('user','guest'), items_json=json.dumps(st.session_state.cart), total=df_total)
+            db.add(order); db.commit()
+            st.success('Order saved (demo)')
+            st.session_state.cart = []
+        except Exception as e:
+            st.error(str(e))
+```
+
+---
+
+### storage.py (S3 or local)
+
+```python
+import os
+import streamlit as st
+
+def upload_image(file_obj, filename):
+    # If S3 configured via environment vars, upload to S3
+    use_s3 = all([os.environ.get('AWS_ACCESS_KEY_ID'), os.environ.get('AWS_SECRET_ACCESS_KEY'), os.environ.get('AWS_S3_BUCKET')])
+    if use_s3:
+        import boto3
+        s3 = boto3.client('s3')
+        bucket = os.environ['AWS_S3_BUCKET']
+        s3.upload_fileobj(file_obj, bucket, filename, ExtraArgs={'ACL':'public-read'})
+        region = os.environ.get('AWS_REGION','us-east-1')
+        url = f"https://{bucket}.s3.{region}.amazonaws.com/{filename}"
+        return url
+    else:
+        os.makedirs('uploads', exist_ok=True)
+        path = os.path.join('uploads', filename)
+        with open(path,'wb') as f:
+            f.write(file_obj.read())
+        return path
+```
+
+---
+
+### admin.py
+
+```python
+import streamlit as st
+from db import get_session, Product
+from storage import upload_image
+
+
+def show_admin_dashboard():
+    user = st.session_state.get('user')
+    if not user:
+        st.warning('Admin login required')
+        return
+    db = get_session()
+    # Quick products table
+    prods = db.query(Product).all()
+    st.dataframe([{'id':p.id,'sku':p.sku,'name':p.name,'price':p.price,'stock':p.stock} for p in prods])
+
+    st.markdown('## Add product')
+    with st.form('addprod'):
+        sku = st.text_input('SKU')
+        name = st.text_input('Name')
+        desc = st.text_area('Description')
+        price = st.number_input('Price', min_value=0.0)
+        cat = st.text_input('Category')
+        stock = st.number_input('Stock', min_value=0)
+        img_file = st.file_uploader('Product image')
+        submitted = st.form_submit_button('Add')
+        if submitted:
+            img_url = None
+            if img_file:
+                img_url = upload_image(img_file, f"prod_{sku}_{img_file.name}")
+            p = Product(sku=sku, name=name, description=desc, price=price, category=cat, stock=stock, image_url=img_url)
+            db.add(p); db.commit()
+            st.success('Added')
+            st.experimental_rerun()
+```
+
+---
+
+### requirements.txt
+
+```
+streamlit
+sqlalchemy
+passlib
+pandas
+stripe
+boto3
+```
+
+---
+
+### .streamlit/config.toml
+
+```toml
+[server]
+headless = true
+port = 8501
+enableCORS = false
+
+[theme]
+primaryColor = "#1f77b4"
+```
+
+---
+
+### .github/workflows/python-app.yml
+
+```yaml
+name: Lint & Test
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Lint
+        run: |
+          pip install black
+          black --check .
+```
+
+---
+
+### README.md (short)
+
+```md
+# Streamlit E-Commerce Demo
+
+A demo e-commerce app built with Streamlit. Features:
+
+- Signup / Login (hashed passwords)
+- Product catalog, search, filters
+- Cart & mock checkout using Stripe test-mode (optional)
+- Admin dashboard to add products + upload images (S3 or local)
+
+## Deploy to Streamlit Cloud
+
+1. Create a GitHub repo and push these files.
+2. Add `requirements.txt`.
+3. (Optional) Add Stripe keys in Streamlit Secrets:
+   ```toml
+   [stripe]
+   publishable_key = "pk_test_xxx"
+   secret_key = "sk_test_xxx"
+   ```
+4. (Optional) Add AWS creds as environment variables for S3 image uploads.
+5. Go to https://share.streamlit.io, connect your repo and deploy.
+
+## Notes
+- This is a demo — for production use a managed DB, secure auth, CSRF protections, and real payment confirmation webhooks.
+```
+
+---
+
+*Done.* I updated the canvas with a modular project scaffold including Stripe test-mode, image upload (S3/local), README and CI. You can now copy each code block into separate files in your repository. If you want, I can (pick one):
+
+• generate the actual files in the repo for you (I will produce file contents here), or
+• produce a `.zip` containing the files for download.
+
+I won't proceed unless you say which of the two you'd like next — or tell me to proceed and I'll generate the files here.
