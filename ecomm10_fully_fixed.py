@@ -21,18 +21,64 @@ if "client_ip_checked" not in st.session_state:
 if "ml_model" not in st.session_state:
     st.session_state.ml_model = None
 
-PRODUCTS = [
-    {"id": 1, "name": "Laptop", "price": 55000, "category": "Computers",
-     "img": "https://raw.githubusercontent.com/srinivasresearchnotecloud/ecommercenew/12424c6bdd48450d4060ba93bbb20a532cf46413/laptop1.jpg"},
-    {"id": 2, "name": "iPhone 16", "price": 80000, "category": "Phones",
-     "img": "https://raw.githubusercontent.com/srinivasresearchnotecloud/ecommercenew/12424c6bdd48450d4060ba93bbb20a532cf46413/iphone16.jpg"},
-    {"id": 3, "name": "Keyboard", "price": 1500, "category": "Accessories",
-     "img": "https://raw.githubusercontent.com/srinivasresearchnotecloud/ecommercenew/12424c6bdd48450d4060ba93bbb20a532cf46413/keyboard.jpg"},
-    {"id": 4, "name": "Watch", "price": 7000, "category": "Wearables",
-     "img": "https://raw.githubusercontent.com/srinivasresearchnotecloud/ecommercenew/12424c6bdd48450d4060ba93bbb20a532cf46413/watch1.jpg"},
-    {"id": 5, "name": "Headphone", "price": 2500, "category": "Audio",
-     "img": "https://raw.githubusercontent.com/srinivasresearchnotecloud/ecommercenew/12424c6bdd48450d4060ba93bbb20a532cf46413/headphone.jpg"}
-]
+# ========== REPLACE FROM HERE ==========
+# Load products from Google Sheets instead of hardcoded list
+@st.cache_data(ttl=600)  # Cache for 10 minutes
+def load_products_from_sheets():
+    try:
+        # Create a connection using Streamlit secrets
+        credentials_dict = dict(st.secrets['gcp_service_account'])
+        credentials = Credentials.from_service_account_info(
+            credentials_dict,
+            scopes=['https://www.googleapis.com/auth/spreadsheets.readonly']
+        )
+        client = gspread.authorize(credentials)
+        
+        # Open your products sheet - change "Products" to your actual sheet name
+        sheet = client.open("Ecommerce").worksheet("Products")  # or use .sheet1 if first sheet
+        
+        # Get all data
+        data = sheet.get_all_records()
+        df = pd.DataFrame(data)
+        
+        # Convert to the format your app expects
+        products = []
+        for _, row in df.iterrows():
+            product = {
+                "id": row.get("id", 0),
+                "name": row.get("name", ""),
+                "price": row.get("price", 0),
+                "category": row.get("category", ""),
+                "img": row.get("img", "")
+            }
+            products.append(product)
+        
+        st.sidebar.success("✅ Products loaded from Google Sheets")
+        return products
+        
+    except Exception as e:
+        st.error(f"❌ Error loading products: {str(e)}")
+        # Fallback to hardcoded products if Sheets fails
+        return get_fallback_products()
+
+def get_fallback_products():
+    """Fallback products in case Google Sheets fails"""
+    return [
+        {"id": 1, "name": "Laptop", "price": 55000, "category": "Computers",
+         "img": "https://raw.githubusercontent.com/srinivasresearchnotecloud/ecommercenew/12424c6bdd48450d4060ba93bbb20a532cf46413/laptop1.jpg"},
+        {"id": 2, "name": "iPhone 16", "price": 80000, "category": "Phones",
+         "img": "https://raw.githubusercontent.com/srinivasresearchnotecloud/ecommercenew/12424c6bdd48450d4060ba93bbb20a532cf46413/iphone16.jpg"},
+        {"id": 3, "name": "Keyboard", "price": 1500, "category": "Accessories",
+         "img": "https://raw.githubusercontent.com/srinivasresearchnotecloud/ecommercenew/12424c6bdd48450d4060ba93bbb20a532cf46413/keyboard.jpg"},
+        {"id": 4, "name": "Watch", "price": 7000, "category": "Wearables",
+         "img": "https://raw.githubusercontent.com/srinivasresearchnotecloud/ecommercenew/12424c6bdd48450d4060ba93bbb20a532cf46413/watch1.jpg"},
+        {"id": 5, "name": "Headphone", "price": 2500, "category": "Audio",
+         "img": "https://raw.githubusercontent.com/srinivasresearchnotecloud/ecommercenew/12424c6bdd48450d4060ba93bbb20a532cf46413/headphone.jpg"}
+    ]
+
+# Load products
+PRODUCTS = load_products_from_sheets()
+# ========== REPLACE UNTIL HERE ==========
 
 LOCAL_PATH = "/mnt/data/images link.txt"
 if os.path.exists(LOCAL_PATH):
@@ -54,17 +100,6 @@ def clean_df(df):
     df.columns = [str(c) for c in df.columns]
     df = df.loc[:, ~pd.Index(df.columns).duplicated()]
     return df
-
-
-
-
-
-
-
-
-
-
-
 
 def get_sheet():
     creds = Credentials.from_service_account_info(
