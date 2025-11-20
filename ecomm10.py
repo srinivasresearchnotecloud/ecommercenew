@@ -1,4 +1,3 @@
-
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
@@ -293,29 +292,37 @@ def admin_panel():
     st.header("Admin")
     st.write("Total Products:", len(PRODUCTS))
 
+
 def analytics():
     st.header("Analytics Dashboard")
+
+    # --- Load data from Google Sheet or local session logs ---
     try:
         raw = get_sheet().get_all_records()
         df = pd.DataFrame(raw)
     except Exception:
         logs = st.session_state.get("_local_logs", [])
         if logs:
-            df = pd.DataFrame(logs, columns=["timestamp","user","product_id","product_name","action","extra"])
+            df = pd.DataFrame(
+                logs,
+                columns=["timestamp", "user", "product_id", "product_name", "action", "extra"],
+            )
         else:
-            df = pd.DataFrame(columns=["timestamp","user","product_id","product_name","action","extra"])
+            df = pd.DataFrame(
+                columns=["timestamp", "user", "product_id", "product_name", "action", "extra"]
+            )
 
     if df.empty:
         st.write("No data yet")
         return
 
-    # ensure timestamp column is datetime
+    # Ensure timestamp column is datetime
     try:
         df["timestamp"] = pd.to_datetime(df["timestamp"])
-    except:
+    except Exception:
         df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
 
-    # normalize extra (geo) JSON column into separate columns
+    # --- Parse geo/extra JSON into flat columns ---
     def parse_extra(x):
         if not x:
             return {}
@@ -324,109 +331,198 @@ def analytics():
                 return json.loads(x)
             if isinstance(x, dict):
                 return x
-        except:
+        except Exception:
             return {}
         return {}
 
     extra_parsed = df["extra"].apply(parse_extra)
     extra_df = pd.json_normalize(extra_parsed).add_prefix("geo_")
-    analytics_df = pd.concat([df.drop(columns=["extra"]), extra_df], axis=1)
 
+    analytics_df = pd.concat([df.drop(columns=["extra"]), extra_df], axis=1)
+    analytics_df = clean_df(analytics_df)
+
+    # --- Raw event log preview ---
     st.subheader("Raw event logs (latest 500)")
     st.dataframe(analytics_df.sort_values("timestamp", ascending=False).head(500))
 
+    # --- Filters ---
     st.subheader("Filters")
     with st.expander("Filter events"):
         col1, col2, col3 = st.columns(3)
         with col1:
-            actions = analytics_df["action"].unique().tolist()
+            actions = sorted(analytics_df["action"].dropna().unique().tolist())
             sel_actions = st.multiselect("Action", options=actions, default=actions)
         with col2:
-            prod_names = analytics_df["product_name"].dropna().unique().tolist()
+            prod_names = sorted(analytics_df["product_name"].dropna().unique().tolist())
             sel_products = st.multiselect("Product", options=prod_names, default=prod_names)
         with col3:
-            users = analytics_df["user"].dropna().unique().tolist()
+            users = sorted(analytics_df["user"].dropna().unique().tolist())
             sel_users = st.multiselect("User", options=users, default=users)
+
         date_col1, date_col2 = st.columns(2)
         with date_col1:
-            min_date = analytics_df["timestamp"].min().date() if not analytics_df["timestamp"].isna().all() else datetime.date.today()
-            max_date = analytics_df["timestamp"].max().date() if not analytics_df["timestamp"].isna().all() else datetime.date.today()
-            start_date = st.date_input("Start date", min_value=min_date, max_value=max_date, value=min_date)
+            if analytics_df["timestamp"].notna().any():
+                min_date = analytics_df["timestamp"].min().date()
+                max_date = analytics_df["timestamp"].max().date()
+            else:
+                today = datetime.date.today()
+                min_date = max_date = today
+            start_date = st.date_input(
+                "Start date",
+                min_value=min_date,
+                max_value=max_date,
+                value=min_date,
+            )
         with date_col2:
-            end_date = st.date_input("End date", min_value=min_date, max_value=max_date, value=max_date)
+            end_date = st.date_input(
+                "End date",
+                min_value=min_date,
+                max_value=max_date,
+                value=max_date,
+            )
+
     mask = (
-        analytics_df["action"].isin(sel_actions) &
-        analytics_df["product_name"].isin(sel_products) &
-        analytics_df["user"].isin(sel_users) &
-        (analytics_df["timestamp"].dt.date >= start_date) &
-        (analytics_df["timestamp"].dt.date <= end_date)
+        analytics_df["action"].isin(sel_actions)
+        & analytics_df["product_name"].isin(sel_products)
+        & analytics_df["user"].isin(sel_users)
+        & (analytics_df["timestamp"].dt.date >= start_date)
+        & (analytics_df["timestamp"].dt.date <= end_date)
     )
     filtered = analytics_df[mask].copy()
+    filtered = clean_df(filtered)
 
-    st.subheader("Summary counts")
-    st.write("Total events in filter:", len(filtered))
-    action_counts = filtered["action"].value_counts().reset_index()
-    action_counts.columns = ["action", "count"]
+    if filtered.empty:
+        st.info("No events for the selected filters.")
+        return
+
+    # Convenience subsets
+    views = filtered[filtered["action"] == "view"].copy()
+    adds = filtered[filtered["action"] == "add_to_cart"].copy()
+    orders = filtered[filtered["action"] == "order"].copy()
+
+    # --- KPI Cards ---
+    st.subheader("Key metrics")
+    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+    with kpi1:
+        st.metric("Total events", len(filtered))
+    with kpi2:
+        st.metric("Unique users", int(filtered["user"].nunique()))
+    with kpi3:
+        st.metric("Total views", int(len(views)))
+    with kpi4:
+        st.metric("Total orders", int(len(orders)))
+
+    # --- Summary counts by action ---
+    st.subheader("Summary counts by action")
+    action_counts = (
+        filtered.groupby("action")
+        .size()
+        .reset_index(name="count")
+        .sort_values("count", ascending=False)
+    )
+    action_counts = clean_df(action_counts)
     st.dataframe(action_counts)
 
+    # --- Clicks by product (views only) ---
     st.subheader("Clicks by product (views only)")
-    views = filtered[filtered["action"] == "view"]
-    clicks_by_product = views["product_name"].value_counts().reset_index()
-    clicks_by_product.columns = ["product_name", "views"]
-    if not clicks_by_product.empty:
+    if not views.empty:
+        clicks_by_product = (
+            views.groupby("product_name")
+            .size()
+            .reset_index(name="views")
+            .sort_values("views", ascending=False)
+        )
+        clicks_by_product = clean_df(clicks_by_product)
         st.bar_chart(clicks_by_product.set_index("product_name")["views"])
         st.dataframe(clicks_by_product)
     else:
         st.write("No view events in selected filter")
 
+    # --- Add-to-cart by product ---
     st.subheader("Add-to-cart by product")
-    adds = filtered[filtered["action"] == "add_to_cart"]
-    adds_by_product = adds["product_name"].value_counts().reset_index()
-    adds_by_product.columns = ["product_name", "adds"]
-    if not adds_by_product.empty:
+    if not adds.empty:
+        adds_by_product = (
+            adds.groupby("product_name")
+            .size()
+            .reset_index(name="adds")
+            .sort_values("adds", ascending=False)
+        )
+        adds_by_product = clean_df(adds_by_product)
         st.bar_chart(adds_by_product.set_index("product_name")["adds"])
         st.dataframe(adds_by_product)
     else:
         st.write("No add_to_cart events in selected filter")
 
+    # --- Orders by product ---
     st.subheader("Orders by product")
-    orders = filtered[filtered["action"] == "order"]
-    orders_by_product = orders["product_name"].value_counts().reset_index()
-    orders_by_product.columns = ["product_name", "orders"]
-    if not orders_by_product.empty:
+    if not orders.empty:
+        orders_by_product = (
+            orders.groupby("product_name")
+            .size()
+            .reset_index(name="orders")
+            .sort_values("orders", ascending=False)
+        )
+        orders_by_product = clean_df(orders_by_product)
         st.bar_chart(orders_by_product.set_index("product_name")["orders"])
         st.dataframe(orders_by_product)
     else:
         st.write("No order events in selected filter")
 
+    # --- Hourly trend (views) ---
     st.subheader("Hourly trend (views)")
     if not views.empty:
-        hourly = views.groupby(views["timestamp"].dt.hour).size().reindex(range(0,24), fill_value=0)
-        st.line_chart(hourly)
-        st.dataframe(hourly.reset_index().rename(columns={"index":"hour", 0:"views"}))
+        views["hour"] = views["timestamp"].dt.hour
+        hourly_series = views.groupby("hour").size()
+        hourly = (
+            hourly_series
+            .reindex(range(0, 24), fill_value=0)
+            .reset_index(name="views")
+        )
+        hourly = clean_df(hourly)
+        st.line_chart(hourly.set_index("hour")["views"])
+        st.dataframe(hourly)
     else:
         st.write("No view events for hourly trend")
 
+    # --- Daily trend (views) ---
     st.subheader("Daily trend (views)")
     if not views.empty:
-        daily = views.groupby(views["timestamp"].dt.date).size()
-        st.line_chart(daily)
-        st.dataframe(daily.reset_index().rename(columns={"index":"date", 0:"views"}))
+        views["date"] = views["timestamp"].dt.date
+        daily = (
+            views.groupby("date")
+            .size()
+            .reset_index(name="views")
+            .sort_values("date")
+        )
+        daily = clean_df(daily)
+        st.line_chart(daily.set_index("date")["views"])
+        st.dataframe(daily)
     else:
         st.write("No view events for daily trend")
 
+    # --- Top users by events ---
     st.subheader("Top users by events")
-    top_users = filtered["user"].value_counts().reset_index().rename(columns={"index":"user", "user":"count"})
-    if not top_users.empty:
-        st.dataframe(top_users)
-        st.bar_chart(top_users.set_index("user")["count"])
-    else:
-        st.write("No user events in filter")
+    top_users = (
+        filtered.groupby("user")
+        .size()
+        .reset_index(name="count")
+        .sort_values("count", ascending=False)
+    )
+    top_users = clean_df(top_users)
+    st.dataframe(top_users)
+    st.bar_chart(top_users.set_index("user")["count"])
 
+    # --- Geo distribution (country) ---
     st.subheader("Geo distribution (country)")
     if "geo_country_name" in analytics_df.columns:
-        country_counts = filtered["geo_country_name"].value_counts().reset_index()
+        country_counts = (
+            filtered["geo_country_name"]
+            .dropna()
+            .value_counts()
+            .reset_index()
+        )
         country_counts.columns = ["country", "count"]
+        country_counts = clean_df(country_counts)
         if not country_counts.empty:
             st.dataframe(country_counts)
             st.bar_chart(country_counts.set_index("country")["count"])
@@ -435,10 +531,17 @@ def analytics():
     else:
         st.write("No geo country data available")
 
+    # --- Clicks by city ---
     st.subheader("Clicks by city")
     if "geo_city" in analytics_df.columns:
-        city_counts = filtered["geo_city"].value_counts().reset_index()
+        city_counts = (
+            filtered["geo_city"]
+            .dropna()
+            .value_counts()
+            .reset_index()
+        )
         city_counts.columns = ["city", "count"]
+        city_counts = clean_df(city_counts)
         if not city_counts.empty:
             st.dataframe(city_counts)
             st.bar_chart(city_counts.set_index("city")["count"])
@@ -447,9 +550,17 @@ def analytics():
     else:
         st.write("No city data available")
 
+    # --- Product vs City heatmap (pivot) ---
     st.subheader("Product vs City heatmap (pivot)")
     if "geo_city" in analytics_df.columns:
-        pivot = filtered.pivot_table(index="product_name", columns="geo_city", values="action", aggfunc="count", fill_value=0)
+        pivot = filtered.pivot_table(
+            index="product_name",
+            columns="geo_city",
+            values="action",
+            aggfunc="count",
+            fill_value=0,
+        )
+        pivot = clean_df(pivot)
         if not pivot.empty:
             st.dataframe(pivot)
         else:
@@ -457,11 +568,15 @@ def analytics():
     else:
         st.write("City information not available for heatmap")
 
+    # --- Map of visitor locations ---
     st.subheader("Map of visitor locations (if latitude/longitude present)")
     if "geo_latitude" in analytics_df.columns and "geo_longitude" in analytics_df.columns:
-        map_df = filtered.dropna(subset=["geo_latitude","geo_longitude"])
+        map_df = filtered.dropna(subset=["geo_latitude", "geo_longitude"]).copy()
         try:
-            map_plot = map_df[["geo_latitude","geo_longitude"]].rename(columns={"geo_latitude":"lat","geo_longitude":"lon"})
+            map_plot = map_df[["geo_latitude", "geo_longitude"]].rename(
+                columns={"geo_latitude": "lat", "geo_longitude": "lon"}
+            )
+            map_plot = clean_df(map_plot)
             if not map_plot.empty:
                 st.map(map_plot)
             else:
@@ -471,46 +586,34 @@ def analytics():
     else:
         st.write("Latitude/Longitude not available in data")
 
+    # --- Export filtered events ---
     st.subheader("Export filtered events")
     csv = filtered.to_csv(index=False)
-    st.download_button("Download CSV of filtered events", csv, file_name="analytics_filtered.csv", mime="text/csv")
+    st.download_button(
+        "Download CSV of filtered events",
+        csv,
+        file_name="analytics_filtered.csv",
+        mime="text/csv",
+    )
 
+    # --- Most / Least viewed products ---
     st.subheader("Most / Least viewed products")
-    if not clicks_by_product.empty:
-        most = clicks_by_product.iloc[0]["product_name"]
-        least = clicks_by_product.iloc[-1]["product_name"]
-        st.write("Most viewed:", most)
-        st.write("Least viewed:", least)
+    if not views.empty:
+        clicks_by_product = (
+            views.groupby("product_name")
+            .size()
+            .reset_index(name="views")
+            .sort_values("views", ascending=False)
+        )
+        if not clicks_by_product.empty:
+            most = clicks_by_product.iloc[0]["product_name"]
+            least = clicks_by_product.iloc[-1]["product_name"]
+            st.write("Most viewed:", most)
+            st.write("Least viewed:", least)
+    else:
+        st.write("No view events to compute most/least viewed products")
 
-ensure_client_ip()
 
-menu = ["Home","Products","Cart","Checkout","Login","Signup","Admin","Analytics"]
-choice = st.sidebar.selectbox("Menu", menu)
-
-if choice == "Home":
-    user = st.session_state.user or "guest"
-    ip = st.session_state.get("client_ip")
-    geo = get_geo(ip) if ip else {}
-    log_event(user, 0, "home", "visit", geo)
-    st.title("E-Commerce App")
-
-elif choice == "Products":
-    product_page()
-
-elif choice == "Cart":
-    show_cart()
-
-elif choice == "Checkout":
-    checkout()
-
-elif choice == "Login":
-    login()
-
-elif choice == "Signup":
-    signup()
-
-elif choice == "Admin":
-    admin_panel()
+    return
 
 elif choice == "Analytics":
-    analytics()
