@@ -43,6 +43,30 @@ if os.path.exists(LOCAL_PATH):
         if i < len(PRODUCTS):
             PRODUCTS[i]["img"] = link
 
+def clean_df(df):
+    """
+    Utility to make any DataFrame safe for Streamlit/pyarrow:
+    - converts column names to strings
+    - removes duplicate columns
+    """
+    if df is None or df is pd.DataFrame() or getattr(df, "empty", False):
+        return df
+    df = df.copy()
+    df.columns = [str(c) for c in df.columns]
+    df = df.loc[:, ~pd.Index(df.columns).duplicated()]
+    return df
+
+
+
+
+
+
+
+
+
+
+
+
 def get_sheet():
     creds = Credentials.from_service_account_info(
         st.secrets["gcp_service_account"],
