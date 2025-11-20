@@ -617,4 +617,22 @@ def analytics():
 
     return
 
+return
+
+# -------------------------
+# MAIN NAVIGATION MENU
+# -------------------------
+st.sidebar.title("Navigation")
+choice = st.sidebar.radio("Go to", ["Home", "Products", "Cart", "Admin", "Analytics"])
+
+if choice == "Home":
+    st.header("Welcome to the E-Commerce App")
+elif choice == "Products":
+    product_page()
+elif choice == "Cart":
+    show_cart()
+elif choice == "Admin":
+    admin_panel()
 elif choice == "Analytics":
+    analytics()
+
