@@ -1,4 +1,5 @@
 
+
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
@@ -55,18 +56,6 @@ def clean_df(df):
     df.columns = [str(c) for c in df.columns]
     df = df.loc[:, ~pd.Index(df.columns).duplicated()]
     return df
-
-
-
-
-
-
-
-
-
-
-
-
 def get_sheet():
     creds = Credentials.from_service_account_info(
         st.secrets["gcp_service_account"],
@@ -616,8 +605,8 @@ def analytics():
 
 
     return
+    return
 
-return
 
 # -------------------------
 # MAIN NAVIGATION MENU
@@ -636,3 +625,4 @@ elif choice == "Admin":
 elif choice == "Analytics":
     analytics()
 
+elif choice == "Analytics":
