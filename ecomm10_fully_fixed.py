@@ -39,6 +39,3 @@ elif choice == "Admin":
 elif choice == "Analytics":
     log_page("analytics_view")
     analytics()
-
-
-
