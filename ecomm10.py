@@ -1,5 +1,3 @@
-
-
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
@@ -14,28 +12,62 @@ import smtplib
 
 st.set_page_config(page_title="E-Commerce App", layout="wide")
 
+# -------------------------
+# SESSION STATE
+# -------------------------
 if "cart" not in st.session_state:
     st.session_state.cart = []
 if "user" not in st.session_state:
     st.session_state.user = None
 if "client_ip_checked" not in st.session_state:
     st.session_state.client_ip_checked = False
+if "client_ip" not in st.session_state:
+    st.session_state.client_ip = None
 if "ml_model" not in st.session_state:
     st.session_state.ml_model = None
 
+# -------------------------
+# PRODUCT CATALOG
+# -------------------------
 PRODUCTS = [
-    {"id": 1, "name": "Laptop", "price": 55000, "category": "Computers",
-     "img": "https://raw.githubusercontent.com/srinivasresearchnotecloud/ecommercenew/12424c6bdd48450d4060ba93bbb20a532cf46413/laptop1.jpg"},
-    {"id": 2, "name": "iPhone 16", "price": 80000, "category": "Phones",
-     "img": "https://raw.githubusercontent.com/srinivasresearchnotecloud/ecommercenew/12424c6bdd48450d4060ba93bbb20a532cf46413/iphone16.jpg"},
-    {"id": 3, "name": "Keyboard", "price": 1500, "category": "Accessories",
-     "img": "https://raw.githubusercontent.com/srinivasresearchnotecloud/ecommercenew/12424c6bdd48450d4060ba93bbb20a532cf46413/keyboard.jpg"},
-    {"id": 4, "name": "Watch", "price": 7000, "category": "Wearables",
-     "img": "https://raw.githubusercontent.com/srinivasresearchnotecloud/ecommercenew/12424c6bdd48450d4060ba93bbb20a532cf46413/watch1.jpg"},
-    {"id": 5, "name": "Headphone", "price": 2500, "category": "Audio",
-     "img": "https://raw.githubusercontent.com/srinivasresearchnotecloud/ecommercenew/12424c6bdd48450d4060ba93bbb20a532cf46413/headphone.jpg"}
+    {
+        "id": 1,
+        "name": "Laptop",
+        "price": 55000,
+        "category": "Computers",
+        "img": "https://raw.githubusercontent.com/srinivasresearchnotecloud/ecommercenew/12424c6bdd48450d4060ba93bbb20a532cf46413/laptop1.jpg",
+    },
+    {
+        "id": 2,
+        "name": "iPhone 16",
+        "price": 80000,
+        "category": "Phones",
+        "img": "https://raw.githubusercontent.com/srinivasresearchnotecloud/ecommercenew/12424c6bdd48450d4060ba93bbb20a532cf46413/iphone16.jpg",
+    },
+    {
+        "id": 3,
+        "name": "Keyboard",
+        "price": 1500,
+        "category": "Accessories",
+        "img": "https://raw.githubusercontent.com/srinivasresearchnotecloud/ecommercenew/12424c6bdd48450d4060ba93bbb20a532cf46413/keyboard.jpg",
+    },
+    {
+        "id": 4,
+        "name": "Watch",
+        "price": 7000,
+        "category": "Wearables",
+        "img": "https://raw.githubusercontent.com/srinivasresearchnotecloud/ecommercenew/12424c6bdd48450d4060ba93bbb20a532cf46413/watch1.jpg",
+    },
+    {
+        "id": 5,
+        "name": "Headphone",
+        "price": 2500,
+        "category": "Audio",
+        "img": "https://raw.githubusercontent.com/srinivasresearchnotecloud/ecommercenew/12424c6bdd48450d4060ba93bbb20a532cf46413/headphone.jpg",
+    },
 ]
 
+# Optional: override image links from a local file if present
 LOCAL_PATH = "/mnt/data/images link.txt"
 if os.path.exists(LOCAL_PATH):
     with open(LOCAL_PATH, "r") as f:
@@ -43,6 +75,7 @@ if os.path.exists(LOCAL_PATH):
     for i, link in enumerate(links):
         if i < len(PRODUCTS):
             PRODUCTS[i]["img"] = link
+
 
 def clean_df(df):
     """
@@ -56,63 +89,113 @@ def clean_df(df):
     df.columns = [str(c) for c in df.columns]
     df = df.loc[:, ~pd.Index(df.columns).duplicated()]
     return df
+
+
+# -------------------------
+# GOOGLE SHEETS HELPERS
+# -------------------------
 def get_sheet():
+    """
+    Connect to Google Sheet 'views' worksheet.
+    Ensures the header row exists so get_all_records() returns proper data.
+    """
     creds = Credentials.from_service_account_info(
         st.secrets["gcp_service_account"],
-        scopes=["https://www.googleapis.com/auth/spreadsheets"]
+        scopes=["https://www.googleapis.com/auth/spreadsheets"],
     )
     gc = gspread.authorize(creds)
     sh = gc.open_by_key(st.secrets["sheets"]["sheet_id"])
     try:
-        return sh.worksheet("views")
-    except:
-        sh.add_worksheet("views", rows="2000", cols="20")
-        return sh.worksheet("views")
+        ws = sh.worksheet("views")
+    except Exception:
+        ws = sh.add_worksheet(title="views", rows="2000", cols="20")
+
+    # Ensure header row exists (A1 will be empty if new sheet)
+    try:
+        if not ws.acell("A1").value:
+            ws.append_row(
+                ["timestamp", "user", "product_id", "product_name", "action", "extra"]
+            )
+    except Exception:
+        # If any error in header creation, continue; logging fallback will handle
+        pass
+
+    return ws
+
 
 def log_event(user, pid, pname, action, extra=None):
+    """
+    Append a single event row to Google Sheet.
+    If Sheets fails, store locally in session_state as fallback.
+    """
     t = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     row = [t, user, pid, pname, action, json.dumps(extra or {})]
     try:
-        get_sheet().append_row(row)
-    except:
+        ws = get_sheet()
+        ws.append_row(row)
+    except Exception:
         st.session_state.setdefault("_local_logs", []).append(row)
 
+
+# -------------------------
+# IP & GEO HELPERS
+# -------------------------
 def ensure_client_ip():
-    if st.session_state.client_ip_checked:
-        return
+    """
+    Inject JS one time to fetch client IP and reload with ?client_ip=...
+    Then store that value into session_state.client_ip.
+    """
     params = st.experimental_get_query_params()
+
+    # If IP already in query params, store and done
     if "client_ip" in params:
         st.session_state.client_ip = params["client_ip"][0]
         st.session_state.client_ip_checked = True
         return
-    html = """
-    <script>
-    (async function(){
-        let r = await fetch('https://api.ipify.org?format=json');
-        let j = await r.json();
-        let ip = j.ip;
-        const qp = new URLSearchParams(window.location.search);
-        if(!qp.get('client_ip')){
-            qp.set('client_ip', ip);
-            window.location.href = window.location.pathname + '?' + qp.toString();
-        }
-    })();
-    </script>
-    """
-    st.components.v1.html(html, height=0)
-    st.session_state.client_ip_checked = True
+
+    # If we haven't tried injecting the script yet, do it once
+    if not st.session_state.client_ip_checked:
+        html = """
+        <script>
+        (async function(){
+            try {
+                let r = await fetch('https://api.ipify.org?format=json');
+                let j = await r.json();
+                let ip = j.ip;
+                const qp = new URLSearchParams(window.location.search);
+                if(!qp.get('client_ip')){
+                    qp.set('client_ip', ip);
+                    window.location.href = window.location.pathname + '?' + qp.toString();
+                }
+            } catch(e) {
+                console.log('IP fetch failed', e);
+            }
+        })();
+        </script>
+        """
+        st.components.v1.html(html, height=0)
+        st.session_state.client_ip_checked = True
+
 
 def get_geo(ip):
+    """
+    Lookup geo info for an IP using ipapi.co.
+    Returns a dict with country, city, lat, lon, etc.
+    """
     try:
         if not ip:
             return {}
         r = requests.get(f"https://ipapi.co/{ip}/json/", timeout=5)
         if r.ok:
             return r.json()
-    except:
+    except Exception:
         pass
     return {"ip": ip} if ip else {}
 
+
+# -------------------------
+# LIGHTWEIGHT "ML" RECOMMENDER (toy)
+# -------------------------
 def encode_texts(texts):
     vocab = {}
     encoded = []
@@ -126,6 +209,7 @@ def encode_texts(texts):
         encoded.append(row)
     return encoded, vocab
 
+
 def vectorize(encoded, size):
     X = np.zeros((len(encoded), size))
     for i, row in enumerate(encoded):
@@ -133,10 +217,11 @@ def vectorize(encoded, size):
             X[i, idx] += 1
     return X
 
+
 def train_lightweight_ml():
     try:
         rows = get_sheet().get_all_records()
-    except:
+    except Exception:
         rows = st.session_state.get("_local_logs", [])
 
     if not rows:
@@ -167,6 +252,7 @@ def train_lightweight_ml():
 
     return (W, vocab, C)
 
+
 def recommend(user, model):
     if not model:
         return [p["name"] for p in PRODUCTS[:3]]
@@ -186,6 +272,10 @@ def recommend(user, model):
             out.append(classes[i])
     return out if out else [p["name"] for p in PRODUCTS[:3]]
 
+
+# -------------------------
+# AUTH (simple)
+# -------------------------
 def login():
     st.header("Login")
     u = st.text_input("Username")
@@ -193,6 +283,7 @@ def login():
     if st.button("Login"):
         st.session_state.user = u
         st.success("Logged in")
+
 
 def signup():
     st.header("Signup")
@@ -202,6 +293,10 @@ def signup():
         st.session_state.user = u
         st.success("Account created")
 
+
+# -------------------------
+# CART / PRODUCT FUNCTIONS
+# -------------------------
 def add_to_cart(p, qty):
     for item in st.session_state.cart:
         if item["id"] == p["id"]:
@@ -209,17 +304,21 @@ def add_to_cart(p, qty):
             break
     else:
         st.session_state.cart.append({**p, "qty": qty})
+
     user = st.session_state.user or "guest"
     ip = st.session_state.get("client_ip")
     geo = get_geo(ip) if ip else {}
+    # Detailed logging: product added to cart
     log_event(user, p["id"], p["name"], "add_to_cart", geo)
+
 
 def product_page():
     st.header("Products")
+
     search = st.text_input("Search")
     categories = sorted(list({p["category"] for p in PRODUCTS}))
     cat_sel = st.multiselect("Filter by Category", categories)
-    sort = st.selectbox("Sort by", ["Default","Price ↑","Price ↓","Name A-Z","Name Z-A"])
+    sort = st.selectbox("Sort by", ["Default", "Price ↑", "Price ↓", "Name A-Z", "Name Z-A"])
 
     prods = PRODUCTS
     if search:
@@ -242,15 +341,19 @@ def product_page():
             st.image(p["img"], use_column_width=True)
             st.write(p["name"], "₹", p["price"])
             qty = st.number_input(f"Qty_{p['id']}", min_value=1, value=1)
+
             if st.button(f"View {p['id']}"):
+                # Detailed logging: product view
                 user = st.session_state.user or "guest"
                 ip = st.session_state.get("client_ip")
                 geo = get_geo(ip) if ip else {}
                 log_event(user, p["id"], p["name"], "view", geo)
-                st.success("Logged view")
+                st.success("Product view logged")
+
             if st.button(f"Add {p['id']}"):
                 add_to_cart(p, int(qty))
-                st.success("Added")
+                st.success("Added to cart")
+
 
 def show_cart():
     st.header("Cart")
@@ -261,6 +364,7 @@ def show_cart():
     df["subtotal"] = df["price"] * df["qty"]
     st.table(df)
     st.write("Total:", df["subtotal"].sum())
+
 
 def checkout():
     st.header("Checkout")
@@ -274,15 +378,24 @@ def checkout():
         ip = st.session_state.get("client_ip")
         geo = get_geo(ip) if ip else {}
         for item in st.session_state.cart:
+            # Detailed logging: final order for each product
             log_event(user, item["id"], item["name"], "order", geo)
         st.success("Order Placed")
         st.session_state.cart = []
 
+
+# -------------------------
+# ADMIN PANEL
+# -------------------------
 def admin_panel():
     st.header("Admin")
     st.write("Total Products:", len(PRODUCTS))
+    st.write("Use the Analytics tab to see detailed visitor & behavior reports.")
 
 
+# -------------------------
+# ANALYTICS DASHBOARD
+# -------------------------
 def analytics():
     st.header("Analytics Dashboard")
 
@@ -398,7 +511,7 @@ def analytics():
     with kpi2:
         st.metric("Unique users", int(filtered["user"].nunique()))
     with kpi3:
-        st.metric("Total views", int(len(views)))
+        st.metric("Total views (product)", int(len(views)))
     with kpi4:
         st.metric("Total orders", int(len(orders)))
 
@@ -463,11 +576,8 @@ def analytics():
     if not views.empty:
         views["hour"] = views["timestamp"].dt.hour
         hourly_series = views.groupby("hour").size()
-        hourly = (
-            hourly_series
-            .reindex(range(0, 24), fill_value=0)
-            .reset_index(name="views")
-        )
+        hourly = hourly_series.reindex(range(0, 24), fill_value=0).reset_index(name="views")
+        hourly = hourly.rename(columns={"index": "hour"}) if "index" in hourly.columns else hourly
         hourly = clean_df(hourly)
         st.line_chart(hourly.set_index("hour")["views"])
         st.dataframe(hourly)
@@ -505,12 +615,7 @@ def analytics():
     # --- Geo distribution (country) ---
     st.subheader("Geo distribution (country)")
     if "geo_country_name" in analytics_df.columns:
-        country_counts = (
-            filtered["geo_country_name"]
-            .dropna()
-            .value_counts()
-            .reset_index()
-        )
+        country_counts = filtered["geo_country_name"].dropna().value_counts().reset_index()
         country_counts.columns = ["country", "count"]
         country_counts = clean_df(country_counts)
         if not country_counts.empty:
@@ -524,12 +629,7 @@ def analytics():
     # --- Clicks by city ---
     st.subheader("Clicks by city")
     if "geo_city" in analytics_df.columns:
-        city_counts = (
-            filtered["geo_city"]
-            .dropna()
-            .value_counts()
-            .reset_index()
-        )
+        city_counts = filtered["geo_city"].dropna().value_counts().reset_index()
         city_counts.columns = ["city", "count"]
         city_counts = clean_df(city_counts)
         if not city_counts.empty:
@@ -598,14 +698,10 @@ def analytics():
         if not clicks_by_product.empty:
             most = clicks_by_product.iloc[0]["product_name"]
             least = clicks_by_product.iloc[-1]["product_name"]
-            st.write("Most viewed:", most)
-            st.write("Least viewed:", least)
+            st.write("Most viewed product:", most)
+            st.write("Least viewed product:", least)
     else:
         st.write("No view events to compute most/least viewed products")
-
-
-    return
-    return
 
 
 # -------------------------
@@ -614,15 +710,34 @@ def analytics():
 st.sidebar.title("Navigation")
 choice = st.sidebar.radio("Go to", ["Home", "Products", "Cart", "Admin", "Analytics"])
 
+# Make sure we try to capture IP early
+ensure_client_ip()
+
+# Precompute user + geo for this run
+current_user = st.session_state.user or "guest"
+current_ip = st.session_state.get("client_ip")
+current_geo = get_geo(current_ip) if current_ip else {}
+
+# Detailed page-level events as you requested (Option C)
 if choice == "Home":
+    log_event(current_user, "-", "-", "home_view", current_geo)
     st.header("Welcome to the E-Commerce App")
+
 elif choice == "Products":
+    log_event(current_user, "-", "-", "products_view", current_geo)
     product_page()
+
 elif choice == "Cart":
+    log_event(current_user, "-", "-", "cart_view", current_geo)
     show_cart()
+    st.subheader("Checkout")
+    checkout()
+
 elif choice == "Admin":
+    log_event(current_user, "-", "-", "admin_view", current_geo)
     admin_panel()
-elif choice == "Analytics":
-    analytics()
 
 elif choice == "Analytics":
+    log_event(current_user, "-", "-", "analytics_view", current_geo)
+    analytics()
+
