@@ -15,12 +15,20 @@ st.set_page_config(page_title="E-Commerce App", layout="wide")
 # =====================================
 @st.cache_resource
 def get_mongo_db():
-    client = MongoClient(st.secrets["MONGO_URI"])
-    return client["ecommerce_db"]
+    try:
+        uri = st.secrets["MONGO_URI"]
+        client = MongoClient(uri, serverSelectionTimeoutMS=5000)
+        client.admin.command("ping")  # force connection test
+        return client["ecommerce_db"]
+    except Exception as e:
+        st.error("MongoDB connection failed")
+        st.error(e)
+        st.stop()
 
 db = get_mongo_db()
 events_col = db["events"]
 orders_col = db["orders"]
+
 
 # =====================================
 # SESSION STATE
