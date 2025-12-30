@@ -68,6 +68,88 @@ def log_event(user, pid, pname, action, extra=None):
 # =========================
 # IP & GEO
 # =========================
+def analytics_dashboard():
+    st.header("📊 E-Commerce Analytics Dashboard")
+
+    # ---------------------------
+    # Load Data from MongoDB
+    # ---------------------------
+    orders = list(orders_col.find({}, {"_id": 0}))
+    events = list(events_col.find({}, {"_id": 0}))
+
+    if not orders and not events:
+        st.warning("No data available yet")
+        return
+
+    orders_df = pd.DataFrame(orders) if orders else pd.DataFrame()
+    events_df = pd.DataFrame(events) if events else pd.DataFrame()
+
+    # ---------------------------
+    # KPI METRICS
+    # ---------------------------
+    st.subheader("🔑 Key Performance Indicators")
+
+    total_orders = len(orders_df)
+    total_revenue = orders_df["total"].sum() if not orders_df.empty else 0
+    total_events = len(events_df)
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total Orders", total_orders)
+    col2.metric("Total Revenue (₹)", int(total_revenue))
+    col3.metric("User Events Logged", total_events)
+
+    st.divider()
+
+    # ---------------------------
+    # ORDERS OVER TIME
+    # ---------------------------
+    if not orders_df.empty:
+        st.subheader("📈 Orders Over Time")
+        orders_df["date"] = pd.to_datetime(orders_df["timestamp"]).dt.date
+        daily_orders = orders_df.groupby("date").size()
+        st.line_chart(daily_orders)
+
+    # ---------------------------
+    # TOP SELLING PRODUCTS
+    # ---------------------------
+    if not orders_df.empty:
+        st.subheader("🏆 Top Selling Products")
+
+        product_sales = []
+        for _, row in orders_df.iterrows():
+            for item in row["items"]:
+                product_sales.append({
+                    "product": item["name"],
+                    "quantity": item["qty"],
+                    "revenue": item["price"] * item["qty"]
+                })
+
+        sales_df = pd.DataFrame(product_sales)
+        top_products = sales_df.groupby("product")["quantity"].sum().sort_values(ascending=False)
+
+        st.bar_chart(top_products)
+
+    # ---------------------------
+    # MOST VIEWED PRODUCTS
+    # ---------------------------
+    if not events_df.empty:
+        st.subheader("👀 Most Viewed Products")
+
+        views_df = events_df[events_df["action"] == "view"]
+        if not views_df.empty:
+            view_counts = views_df["product_name"].value_counts()
+            st.bar_chart(view_counts)
+
+    # ---------------------------
+    # USER ACTIVITY DISTRIBUTION
+    # ---------------------------
+    if not events_df.empty:
+        st.subheader("🧭 User Activity Distribution")
+        activity_counts = events_df["action"].value_counts()
+        st.bar_chart(activity_counts)
+
+
+
 def get_client_ip():
     try:
         return requests.get("https://api.ipify.org?format=json", timeout=5).json()["ip"]
@@ -157,7 +239,11 @@ def analytics():
 # NAVIGATION
 # =========================
 st.sidebar.title("Navigation")
-choice = st.sidebar.radio("Go to", ["Home", "Products", "Cart", "Analytics"])
+
+choice = st.sidebar.radio(
+    "Go to",
+    ["Home", "Products", "Cart", "Analytics"]
+)
 
 if choice == "Home":
     st.header("Welcome to the E-Commerce App")
@@ -170,4 +256,5 @@ elif choice == "Cart":
     checkout()
 
 elif choice == "Analytics":
-    analytics()
+    analytics_dashboard()
+
