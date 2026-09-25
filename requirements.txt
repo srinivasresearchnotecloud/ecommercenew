@@ -1,10 +1,8 @@
-dnspython
-gspread
-google-auth
-google-auth-oauthlib
 pandas
-requests
-streamlit
 pymongo
 numpy
-
+streamlit
+pandas
+numpy
+requests
+dnspython
