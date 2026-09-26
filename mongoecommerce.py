@@ -452,20 +452,11 @@ def analytics_dashboard():
 # ============================================================
 
 def product_page():
-
-    st.header(
-        "Products"
-    )
-
+    st.header("Products")
     cols = st.columns(3)
 
     for i, p in enumerate(PRODUCTS):
-
         with cols[i % 3]:
-
-            # IMPORTANT:
-            # Updated from use_column_width=True
-            # to use_container_width=True
 
             st.image(
                 p["img"],
@@ -481,32 +472,26 @@ def product_page():
             qty = st.number_input(
                 f"Qty_{p['id']}",
                 min_value=1,
-                value=1,
-                key=f"qty_{p['id']}"
+                value=1
             )
 
             if st.button(
                 f"Add {p['id']}",
                 key=f"add_{p['id']}"
             ):
-
                 add_to_cart(
                     p,
                     int(qty)
                 )
 
-                st.success(
-                    "Added to cart"
-                )
+                st.success("Added to cart")
 
                 log_event(
-                    st.session_state.user
-                    or "guest",
+                    st.session_state.user or "guest",
                     p["id"],
                     p["name"],
                     "view"
                 )
-
 
 # ============================================================
 # SHOW CART
