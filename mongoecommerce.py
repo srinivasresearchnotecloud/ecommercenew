@@ -6,16 +6,19 @@ import requests
 import json
 from pymongo import MongoClient
 
-st.set_page_config(page_title="E-Commerce App", layout="wide")
+st.set_page_config(
+    page_title="E-Commerce App",
+    layout="wide"
+)
 
 
-# =========================
+# ============================================================
 # MONGODB CONNECTION
-# =========================
+# ============================================================
+
 @st.cache_resource
 def get_mongo():
     try:
-        # Connection string comes from Streamlit Secrets
         client = MongoClient(
             st.secrets["MONGO_URI"],
             serverSelectionTimeoutMS=10000,
@@ -24,10 +27,10 @@ def get_mongo():
             tls=True
         )
 
-        # Test connection to MongoDB Atlas
+        # Test MongoDB connection
         client.admin.command("ping")
 
-        # Your application database
+        # Database
         db = client["ecommerce_db"]
 
         return db
@@ -40,14 +43,15 @@ def get_mongo():
 
 db = get_mongo()
 
-# MongoDB collections
+# Collections
 events_col = db["events"]
 orders_col = db["orders"]
 
 
-# =========================
+# ============================================================
 # SESSION STATE
-# =========================
+# ============================================================
+
 if "cart" not in st.session_state:
     st.session_state.cart = []
 
@@ -61,9 +65,10 @@ if "ml_model" not in st.session_state:
     st.session_state.ml_model = None
 
 
-# =========================
+# ============================================================
 # PRODUCT CATALOG
-# =========================
+# ============================================================
+
 PRODUCTS = [
     {
         "id": 1,
@@ -99,14 +104,16 @@ PRODUCTS = [
         "price": 2500,
         "category": "Audio",
         "img": "https://raw.githubusercontent.com/srinivasresearchnotecloud/ecommercenew/main/headphone.jpg"
-    },
+    }
 ]
 
 
-# =========================
-# LOG EVENT TO MONGODB
-# =========================
+# ============================================================
+# LOG EVENT
+# ============================================================
+
 def log_event(user, pid, pname, action, extra=None):
+
     try:
         events_col.insert_one({
             "timestamp": datetime.datetime.utcnow(),
@@ -116,29 +123,37 @@ def log_event(user, pid, pname, action, extra=None):
             "action": action,
             "extra": extra or {}
         })
+
     except Exception as e:
-        st.warning(f"Could not log event: {e}")
+        st.warning(
+            f"Unable to log event: {e}"
+        )
 
 
-# =========================
+# ============================================================
 # IP & GEO
-# =========================
+# ============================================================
+
 def get_client_ip():
+
     try:
         return requests.get(
             "https://api.ipify.org?format=json",
             timeout=5
         ).json()["ip"]
+
     except Exception:
         return None
 
 
 def get_geo(ip):
+
     try:
         return requests.get(
             f"https://ipapi.co/{ip}/json/",
             timeout=5
         ).json()
+
     except Exception:
         return {}
 
@@ -147,18 +162,21 @@ if st.session_state.client_ip is None:
     st.session_state.client_ip = get_client_ip()
 
 
-# =========================
-# ADD TO CART
-# =========================
+# ============================================================
+# CART
+# ============================================================
+
 def add_to_cart(p, qty):
 
     for i in st.session_state.cart:
 
         if i["id"] == p["id"]:
+
             i["qty"] += qty
             break
 
     else:
+
         st.session_state.cart.append({
             **p,
             "qty": qty
@@ -172,34 +190,68 @@ def add_to_cart(p, qty):
     )
 
 
-# =========================
+# ============================================================
 # ANALYTICS DASHBOARD
-# =========================
+# ============================================================
+
 def analytics_dashboard():
 
-    st.header("📊 E-Commerce Analytics Dashboard")
+    st.header(
+        "📊 E-Commerce Analytics Dashboard"
+    )
 
-    # Load orders
+    # --------------------------------------------------------
+    # Load Orders
+    # --------------------------------------------------------
+
     try:
+
         orders = list(
-            orders_col.find({}, {"_id": 0})
+            orders_col.find(
+                {},
+                {"_id": 0}
+            )
         )
+
     except Exception as e:
-        st.error(f"Unable to load orders: {e}")
+
+        st.error(
+            f"Unable to load orders: {e}"
+        )
+
         orders = []
 
-    # Load events
+
+    # --------------------------------------------------------
+    # Load Events
+    # --------------------------------------------------------
+
     try:
+
         events = list(
-            events_col.find({}, {"_id": 0})
+            events_col.find(
+                {},
+                {"_id": 0}
+            )
         )
+
     except Exception as e:
-        st.error(f"Unable to load events: {e}")
+
+        st.error(
+            f"Unable to load events: {e}"
+        )
+
         events = []
 
+
     if not orders and not events:
-        st.warning("No data available yet")
+
+        st.warning(
+            "No data available yet"
+        )
+
         return
+
 
     orders_df = (
         pd.DataFrame(orders)
@@ -214,20 +266,36 @@ def analytics_dashboard():
     )
 
 
-    # =========================
+    # ========================================================
     # KPI METRICS
-    # =========================
-    st.subheader("🔑 Key Performance Indicators")
+    # ========================================================
 
-    total_orders = len(orders_df)
-
-    total_revenue = (
-        orders_df["total"].sum()
-        if not orders_df.empty and "total" in orders_df.columns
-        else 0
+    st.subheader(
+        "🔑 Key Performance Indicators"
     )
 
-    total_events = len(events_df)
+    total_orders = len(
+        orders_df
+    )
+
+    if (
+        not orders_df.empty
+        and "total" in orders_df.columns
+    ):
+
+        total_revenue = orders_df[
+            "total"
+        ].sum()
+
+    else:
+
+        total_revenue = 0
+
+
+    total_events = len(
+        events_df
+    )
+
 
     col1, col2, col3 = st.columns(3)
 
@@ -249,32 +317,47 @@ def analytics_dashboard():
     st.divider()
 
 
-    # =========================
+    # ========================================================
     # ORDERS OVER TIME
-    # =========================
+    # ========================================================
+
     if not orders_df.empty:
 
-        st.subheader("📈 Orders Over Time")
+        st.subheader(
+            "📈 Orders Over Time"
+        )
 
         if "timestamp" in orders_df.columns:
 
-            orders_df["date"] = pd.to_datetime(
-                orders_df["timestamp"]
-            ).dt.date
+            orders_df["date"] = (
+                pd.to_datetime(
+                    orders_df["timestamp"]
+                ).dt.date
+            )
 
-            daily_orders = orders_df.groupby("date").size()
+            daily_orders = (
+                orders_df
+                .groupby("date")
+                .size()
+            )
 
-            st.line_chart(daily_orders)
+            st.line_chart(
+                daily_orders
+            )
 
 
-    # =========================
+    # ========================================================
     # TOP SELLING PRODUCTS
-    # =========================
+    # ========================================================
+
     if not orders_df.empty:
 
-        st.subheader("🏆 Top Selling Products")
+        st.subheader(
+            "🏆 Top Selling Products"
+        )
 
         product_sales = []
+
 
         if "items" in orders_df.columns:
 
@@ -286,10 +369,11 @@ def analytics_dashboard():
                         "product": item["name"],
                         "quantity": item["qty"],
                         "revenue": (
-                            item["price"] *
-                            item["qty"]
+                            item["price"]
+                            * item["qty"]
                         )
                     })
+
 
         if product_sales:
 
@@ -301,18 +385,25 @@ def analytics_dashboard():
                 sales_df
                 .groupby("product")["quantity"]
                 .sum()
-                .sort_values(ascending=False)
+                .sort_values(
+                    ascending=False
+                )
             )
 
-            st.bar_chart(top_products)
+            st.bar_chart(
+                top_products
+            )
 
 
-    # =========================
+    # ========================================================
     # MOST VIEWED PRODUCTS
-    # =========================
+    # ========================================================
+
     if not events_df.empty:
 
-        st.subheader("👀 Most Viewed Products")
+        st.subheader(
+            "👀 Most Viewed Products"
+        )
 
         if "action" in events_df.columns:
 
@@ -323,16 +414,20 @@ def analytics_dashboard():
             if not views_df.empty:
 
                 view_counts = (
-                    views_df["product_name"]
-                    .value_counts()
+                    views_df[
+                        "product_name"
+                    ].value_counts()
                 )
 
-                st.bar_chart(view_counts)
+                st.bar_chart(
+                    view_counts
+                )
 
 
-    # =========================
-    # USER ACTIVITY
-    # =========================
+    # ========================================================
+    # USER ACTIVITY DISTRIBUTION
+    # ========================================================
+
     if not events_df.empty:
 
         st.subheader(
@@ -342,25 +437,35 @@ def analytics_dashboard():
         if "action" in events_df.columns:
 
             activity_counts = (
-                events_df["action"]
-                .value_counts()
+                events_df[
+                    "action"
+                ].value_counts()
             )
 
-            st.bar_chart(activity_counts)
+            st.bar_chart(
+                activity_counts
+            )
 
 
-# =========================
+# ============================================================
 # PRODUCT PAGE
-# =========================
+# ============================================================
+
 def product_page():
 
-    st.header("Products")
+    st.header(
+        "Products"
+    )
 
     cols = st.columns(3)
 
     for i, p in enumerate(PRODUCTS):
 
         with cols[i % 3]:
+
+            # IMPORTANT:
+            # Updated from use_column_width=True
+            # to use_container_width=True
 
             st.image(
                 p["img"],
@@ -376,7 +481,8 @@ def product_page():
             qty = st.number_input(
                 f"Qty_{p['id']}",
                 min_value=1,
-                value=1
+                value=1,
+                key=f"qty_{p['id']}"
             )
 
             if st.button(
@@ -394,36 +500,45 @@ def product_page():
                 )
 
                 log_event(
-                    st.session_state.user or "guest",
+                    st.session_state.user
+                    or "guest",
                     p["id"],
                     p["name"],
                     "view"
                 )
 
 
-# =========================
-# CART
-# =========================
+# ============================================================
+# SHOW CART
+# ============================================================
+
 def show_cart():
 
-    st.header("Cart")
+    st.header(
+        "Cart"
+    )
 
     if not st.session_state.cart:
 
-        st.info("Cart empty")
+        st.info(
+            "Cart empty"
+        )
 
         return
+
 
     df = pd.DataFrame(
         st.session_state.cart
     )
 
     df["subtotal"] = (
-        df["price"] *
-        df["qty"]
+        df["price"]
+        * df["qty"]
     )
 
-    st.table(df)
+    st.table(
+        df
+    )
 
     st.write(
         "Total:",
@@ -431,24 +546,33 @@ def show_cart():
     )
 
 
-# =========================
+# ============================================================
 # CHECKOUT
-# =========================
+# ============================================================
+
 def checkout():
 
-    st.header("Checkout")
+    st.header(
+        "Checkout"
+    )
 
     if not st.session_state.cart:
 
-        st.info("Cart empty")
+        st.info(
+            "Cart empty"
+        )
 
         return
+
 
     address = st.text_area(
         "Address"
     )
 
-    if st.button("Place Order"):
+
+    if st.button(
+        "Place Order"
+    ):
 
         try:
 
@@ -456,6 +580,7 @@ def checkout():
                 i["price"] * i["qty"]
                 for i in st.session_state.cart
             )
+
 
             orders_col.insert_one({
 
@@ -476,7 +601,9 @@ def checkout():
                     datetime.datetime.utcnow()
             })
 
-            # Log individual order events
+
+            # Log order events
+
             for i in st.session_state.cart:
 
                 log_event(
@@ -490,11 +617,14 @@ def checkout():
                     "order"
                 )
 
+
             st.session_state.cart = []
+
 
             st.success(
                 "Order placed successfully"
             )
+
 
         except Exception as e:
 
@@ -503,12 +633,15 @@ def checkout():
             )
 
 
-# =========================
-# ANALYTICS TABLE
-# =========================
+# ============================================================
+# ANALYTICS
+# ============================================================
+
 def analytics():
 
-    st.header("Analytics")
+    st.header(
+        "Analytics"
+    )
 
     try:
 
@@ -527,13 +660,20 @@ def analytics():
 
         return
 
+
     if not data:
 
-        st.info("No data yet")
+        st.info(
+            "No data yet"
+        )
 
         return
 
-    df = pd.DataFrame(data)
+
+    df = pd.DataFrame(
+        data
+    )
+
 
     if "timestamp" in df.columns:
 
@@ -546,10 +686,12 @@ def analytics():
             ascending=False
         )
 
+
     st.dataframe(
         df,
         use_container_width=True
     )
+
 
     if "action" in df.columns:
 
@@ -558,12 +700,14 @@ def analytics():
         )
 
 
-# =========================
+# ============================================================
 # NAVIGATION
-# =========================
+# ============================================================
+
 st.sidebar.title(
     "Navigation"
 )
+
 
 choice = st.sidebar.radio(
     "Go to",
@@ -575,6 +719,10 @@ choice = st.sidebar.radio(
     ]
 )
 
+
+# ============================================================
+# PAGE SELECTION
+# ============================================================
 
 if choice == "Home":
 
@@ -591,7 +739,6 @@ elif choice == "Products":
 elif choice == "Cart":
 
     show_cart()
-
     checkout()
 
 
