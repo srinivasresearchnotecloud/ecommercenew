@@ -113,22 +113,29 @@ PRODUCTS = [
 # ============================================================
 
 def log_event(user, pid, pname, action, extra=None):
+    """Store one application event in MongoDB Atlas."""
+
+    event = {
+        "timestamp": datetime.datetime.utcnow(),
+        "user": str(user) if user is not None else "guest",
+        "product_id": str(pid) if pid is not None else "-",
+        "product_name": str(pname) if pname is not None else "-",
+        "action": str(action),
+        "extra": extra or {},
+    }
 
     try:
-        events_col.insert_one({
-            "timestamp": datetime.datetime.utcnow(),
-            "user": user,
-            "product_id": pid,
-            "product_name": pname,
-            "action": action,
-            "extra": extra or {}
-        })
+        result = get_events_collection().insert_one(event)
+
+        # Confirm MongoDB actually created the event
+        if result.inserted_id:
+            return True
+
+        return False
 
     except Exception as e:
-        st.warning(
-            f"Unable to log event: {e}"
-        )
-
+        st.error(f"Event logging failed: {e}")
+        return False
 
 # ============================================================
 # IP & GEO
